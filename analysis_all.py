@@ -194,8 +194,9 @@ def stability_detection_v2(ratio_series: pd.Series,
     print('稳定性检测完成')
     return pd.DataFrame(results), resets
 
-def plot_results(symbol: str, result_df: pd.DataFrame, output_dir: str = "./data/images"):
-    # 创建输出目录
+def plot_results(symbol: str, result_df: pd.DataFrame, ratio: pd.Series, slow_alpha: float,
+                 output_dir: str = "./data/images"):
+    # 创建输出目录put-dir
     os.makedirs(output_dir, exist_ok=True)
 
     # 绘图：与原分析风格保持一致
@@ -203,9 +204,10 @@ def plot_results(symbol: str, result_df: pd.DataFrame, output_dir: str = "./data
     
     # 主图：比值与均线
     result_df['value'].plot(ax=ax1, color='tab:gray', alpha=0.5, label='bid/bid', linewidth=1)
-    result_df['ma_fast'].plot(ax=ax1, color='tab:blue', label='快速均线', linewidth=2)
+    # result_df['ma_fast'].plot(ax=ax1, color='tab:blue', label='快速均线', linewidth=2)
     result_df['ma_slow'].plot(ax=ax1, color='tab:green', label='慢速均线', linewidth=2)
-    
+    ratio.ewm(alpha=slow_alpha, adjust=False).mean().plot(ax=ax1, color='tab:orange', linestyle='--', label='未调整均线', linewidth=1)
+
     # 标记不稳定区间
     unstable_mask = result_df['is_unstable'].fillna(False).values
     unstable_starts, unstable_ends = [], []
@@ -369,7 +371,7 @@ def task(
     result_df.set_index('timestamp', inplace=True)
 
     # 绘制结果并保存
-    plot_results(symbol, result_df, output_dir=output_dir)
+    plot_results(symbol, result_df, ratio, alpha_slow, output_dir)
 
 if __name__ == '__main__':
     # 使用多进程
