@@ -390,8 +390,10 @@ if __name__ == '__main__':
     # 其他参数
     parser.add_argument('--symbols', nargs='+', default=["BNBUSDT", "AAVEUSDT"], help='交易对列表')
     parser.add_argument('--processes', type=int, default=None, help='并行进程数，默认按CPU和symbols取小')
-    parser.add_argument('--alpha-fast', type=float, default=None, help='快速EMA的alpha（默认1小时换算）')
-    parser.add_argument('--alpha-slow', type=float, default=None, help='慢速EMA的alpha（默认4小时换算）')
+    # parser.add_argument('--alpha-fast', type=float, default=None, help='快速EMA的alpha（默认1小时换算）')
+    # parser.add_argument('--alpha-slow', type=float, default=None, help='慢速EMA的alpha（默认4小时换算）')
+    parser.add_argument('--fast-hours', type=float, default=1.0, help='快速EMA的时间窗口（小时）')
+    parser.add_argument('--slow-hours', type=float, default=4.0, help='慢速EMA的时间窗口（小时）')
     parser.add_argument('--min-periods', type=int, default=600, help='初始化简单均值/方差的样本数')
     parser.add_argument('--wait-minutes', type=int, default=30, help='进入不稳定后等待分钟数')
     parser.add_argument('--enter-confirm-secs', type=int, default=60, help='进入不稳定阈值需持续秒数')
@@ -406,8 +408,10 @@ if __name__ == '__main__':
     stable_mult = args.stable_mult
     symbols = args.symbols
     procs = args.processes or min(len(symbols), os.cpu_count() or 2)
-    alpha_fast = args.alpha_fast
-    alpha_slow = args.alpha_slow
+    # alpha_fast = args.alpha_fast
+    # alpha_slow = args.alpha_slow
+    alpha_fast = 2 / (args.fast_hours * 60 * 60 + 1)
+    alpha_slow = 2 / (args.slow_hours * 60 * 60 + 1)
     min_periods = args.min_periods
     wait_minutes = args.wait_minutes
     enter_confirm_secs = args.enter_confirm_secs
