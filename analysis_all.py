@@ -402,6 +402,8 @@ if __name__ == '__main__':
     parser.add_argument('--binance-dir', type=str, default='data/binance/', help='Binance数据目录')
     parser.add_argument('--bitget-dir', type=str, default='data/bitget/', help='Bitget数据目录')
     parser.add_argument('--output-dir', type=str, default='./data/images', help='图表输出目录')
+    # 是否处理所有CSV文件
+    parser.add_argument('--all', action='store_true', help='处理目录下所有CSV文件作为交易对')
     args = parser.parse_args()
     enter_mult = args.enter_mult
     reset_mult = args.reset_mult
@@ -420,6 +422,22 @@ if __name__ == '__main__':
     binance_dir = args.binance_dir
     bitget_dir = args.bitget_dir
     output_dir = args.output_dir
+
+    # 读取目录下的所有CSV文件作为交易对
+    # binance symbols
+    if args.all:
+        print('检测数据目录下的所有CSV文件作为交易对...')
+        if os.path.isdir(binance_dir) and os.path.isdir(bitget_dir):
+            binance_files = [f for f in os.listdir(binance_dir) if f.endswith('.csv')]
+            bitget_files = [f for f in os.listdir(bitget_dir) if f.endswith('.csv')]
+            binance_syms = set(f[:-4] for f in binance_files)
+            bitget_syms = set(f[:-4] for f in bitget_files)
+            available_syms = list(binance_syms.intersection(bitget_syms))
+            if available_syms:
+                symbols = available_syms
+                print(f'自动检测到交易对，共{len(symbols)}个：{symbols}')
+            else:
+                print('未检测到匹配的交易对CSV文件，使用默认列表')
 
     print(f'运行参数：symbols={symbols}, processes={procs}')
     print(f'阈值乘数：enter={enter_mult}, reset={reset_mult}, stable={stable_mult}')
