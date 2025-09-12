@@ -57,9 +57,11 @@ class MovingMeanStdCalculator:
         return self.squared_mean - (self.mean * self.mean)
     
 # 数据加载
-def get_ratio_data(symbol: str) -> pd.Series | None:
-    binance_data_dir = 'data/binance/'
-    bitget_data_dir = 'data/bitget/'
+def get_ratio_data(
+    symbol: str,
+    binance_data_dir: str = 'data/binance/',
+    bitget_data_dir: str = 'data/bitget/'
+) -> pd.Series | None:
 
     binance_file_path = os.path.join(binance_data_dir, f'{symbol}.csv')
     bitget_file_path = os.path.join(bitget_data_dir, f'{symbol}.csv')
@@ -238,27 +240,204 @@ def plot_results(symbol: str, result_df: pd.DataFrame, output_dir: str = "./data
 
 
 # task
-def task(symbol: str):
+def stability_detection_v3(
+    ratio_series: pd.Series,
+    alpha_fast: float | None = None,
+    alpha_slow: float | None = None,
+    min_periods: int = 600,
+    wait_minutes: int = 30,
+    enter_confirm_secs: int = 60,
+    std_floor: float = 1e-4,
+    enter_threshold_mult: float = 0.5,
+    reset_threshold_mult: float = 0.3,
+    stable_threshold_mult: float = 0.1,
+    stable_need_secs: int = 180,
+):
+    if alpha_fast is None:
+        alpha_fast = 2 / (1 * 60 * 60 + 1)
+    if alpha_slow is None:
+        alpha_slow = 2 / (4 * 60 * 60 + 1)
+
+    ma_fast_calc = MovingMeanStdCalculator(alpha=alpha_fast, min_periods=min_periods)
+    ma_slow_calc = MovingMeanStdCalculator(alpha=alpha_slow, min_periods=min_periods)
+
+    state_unstable = False
+    cooldown_until = None
+    stable_secs = 0
+    wait_delta = pd.Timedelta(minutes=wait_minutes)
+    enter_breach_start = None
+
+    results = []
+    resets = []
+
+    print('开始稳定性检测...')
+    for ts, v in ratio_series.items():
+        ma_fast, _ = ma_fast_calc.update(v)
+        ma_slow, std_slow = ma_slow_calc.update(v)
+        std_slow_eff = max(std_slow, std_floor)
+        d = abs(ma_fast - ma_slow)
+
+        if not state_unstable:
+            if d > enter_threshold_mult * std_slow_eff:
+                if enter_breach_start is None:
+                    enter_breach_start = ts
+                duration_ok = (ts - enter_breach_start) >= pd.Timedelta(seconds=enter_confirm_secs)
+                if duration_ok:
+                    state_unstable = True
+                    cooldown_until = ts + wait_delta
+                    stable_secs = 0
+                    enter_breach_start = None
+                    ma_fast_calc.reset(); ma_slow_calc.reset()
+                    ma_fast_calc.update(v); ma_slow_calc.update(v)
+                    print(
+                        f'不稳定开始 {ts}, 超过{enter_threshold_mult}×std已持续≥{enter_confirm_secs}s，阈值= '
+                        f'{enter_threshold_mult * std_slow_eff:.6f}，进入等待{wait_minutes}分钟'
+                    )
+                    resets.append((ts, 'start'))
+            else:
+                enter_breach_start = None
+        else:
+            if d > reset_threshold_mult * std_slow_eff:
+                cooldown_until = ts + wait_delta
+                stable_secs = 0
+                ma_fast_calc.reset(); ma_slow_calc.reset()
+                ma_fast_calc.update(v); ma_slow_calc.update(v)
+                print(f'再次重置: {ts}, 差距={d:.6f} > {reset_threshold_mult}×std，重新等待{wait_minutes}分钟')
+                resets.append((ts, 'reset'))
+            else:
+                if cooldown_until is not None and ts >= cooldown_until:
+                    if d < stable_threshold_mult * std_slow_eff:
+                        stable_secs += 1
+                    else:
+                        stable_secs = 0
+                    if stable_secs >= stable_need_secs:
+                        state_unstable = False
+                        print(f'不稳定结束 {ts}, 低于{stable_threshold_mult}×std已持续{stable_need_secs}秒')
+                        cooldown_until = None
+                        stable_secs = 0
+
+        results.append({
+            'timestamp': ts,
+            'value': v,
+            'ma_fast': ma_fast,
+            'ma_slow': ma_slow,
+            'std_slow_base': std_slow,
+            'ma_diff': d,
+            'is_unstable': state_unstable,
+            'cooldown_until': cooldown_until,
+        })
+
+    print('稳定性检测完成')
+    return pd.DataFrame(results), resets
+
+def task(
+    symbol: str,
+    enter_threshold_mult: float = 0.5,
+    reset_threshold_mult: float = 0.3,
+    stable_threshold_mult: float = 0.1,
+    alpha_fast: float | None = None,
+    alpha_slow: float | None = None,
+    min_periods: int = 600,
+    wait_minutes: int = 30,
+    enter_confirm_secs: int = 60,
+    std_floor: float = 1e-4,
+    stable_need_secs: int = 180,
+    binance_dir: str = 'data/binance/',
+    bitget_dir: str = 'data/bitget/',
+    output_dir: str = './data/images',
+):
     # 读取数据
-    ratio = get_ratio_data(symbol)
+    ratio = get_ratio_data(symbol, binance_dir, bitget_dir)
     if ratio is None:
         print(f"无法处理 {symbol}，数据加载失败")
         return
     
     # 运行检测
-    result_df, reset_events = stability_detection_v2(ratio)
+    result_df, reset_events = stability_detection_v3(
+        ratio,
+        alpha_fast=alpha_fast,
+        alpha_slow=alpha_slow,
+        min_periods=min_periods,
+        wait_minutes=wait_minutes,
+        enter_confirm_secs=enter_confirm_secs,
+        std_floor=std_floor,
+        enter_threshold_mult=enter_threshold_mult,
+        reset_threshold_mult=reset_threshold_mult,
+        stable_threshold_mult=stable_threshold_mult,
+        stable_need_secs=stable_need_secs,
+    )
     result_df.set_index('timestamp', inplace=True)
 
     # 绘制结果并保存
-    plot_results(symbol, result_df)
+    plot_results(symbol, result_df, output_dir=output_dir)
 
 if __name__ == '__main__':
     # 使用多进程
     import multiprocessing
     from multiprocessing import Pool
+    import argparse
     
     symbols = ["BNBUSDT", "AAVEUSDT"]
 
-    with Pool(processes=2) as pool:
-        pool.map(task, symbols)
+    # 命令行参数：阈值乘数
+    parser = argparse.ArgumentParser(description='稳定性检测阈值乘数配置')
+    parser.add_argument('--enter-mult', type=float, default=0.5,
+                        help='进入不稳定阈值乘数，默认 0.5')
+    parser.add_argument('--reset-mult', type=float, default=0.3,
+                        help='不稳定阶段重置阈值乘数，默认 0.3')
+    parser.add_argument('--stable-mult', type=float, default=0.1,
+                        help='恢复稳定判定阈值乘数，默认 0.1')
+    # 其他参数
+    parser.add_argument('--symbols', nargs='+', default=["BNBUSDT", "AAVEUSDT"], help='交易对列表')
+    parser.add_argument('--processes', type=int, default=None, help='并行进程数，默认按CPU和symbols取小')
+    parser.add_argument('--alpha-fast', type=float, default=None, help='快速EMA的alpha（默认1小时换算）')
+    parser.add_argument('--alpha-slow', type=float, default=None, help='慢速EMA的alpha（默认4小时换算）')
+    parser.add_argument('--min-periods', type=int, default=600, help='初始化简单均值/方差的样本数')
+    parser.add_argument('--wait-minutes', type=int, default=30, help='进入不稳定后等待分钟数')
+    parser.add_argument('--enter-confirm-secs', type=int, default=60, help='进入不稳定阈值需持续秒数')
+    parser.add_argument('--std-floor', type=float, default=1e-4, help='标准差下限以避免为0')
+    parser.add_argument('--stable-need-secs', type=int, default=180, help='恢复稳定需持续秒数')
+    parser.add_argument('--binance-dir', type=str, default='data/binance/', help='Binance数据目录')
+    parser.add_argument('--bitget-dir', type=str, default='data/bitget/', help='Bitget数据目录')
+    parser.add_argument('--output-dir', type=str, default='./data/images', help='图表输出目录')
+    args = parser.parse_args()
+    enter_mult = args.enter_mult
+    reset_mult = args.reset_mult
+    stable_mult = args.stable_mult
+    symbols = args.symbols
+    procs = args.processes or min(len(symbols), os.cpu_count() or 2)
+    alpha_fast = args.alpha_fast
+    alpha_slow = args.alpha_slow
+    min_periods = args.min_periods
+    wait_minutes = args.wait_minutes
+    enter_confirm_secs = args.enter_confirm_secs
+    std_floor = args.std_floor
+    stable_need_secs = args.stable_need_secs
+    binance_dir = args.binance_dir
+    bitget_dir = args.bitget_dir
+    output_dir = args.output_dir
+
+    print(f'运行参数：symbols={symbols}, processes={procs}')
+    print(f'阈值乘数：enter={enter_mult}, reset={reset_mult}, stable={stable_mult}')
+
+    with Pool(processes=procs) as pool:
+        pool.starmap(
+            task,
+            [(
+                sym,
+                enter_mult,
+                reset_mult,
+                stable_mult,
+                alpha_fast,
+                alpha_slow,
+                min_periods,
+                wait_minutes,
+                enter_confirm_secs,
+                std_floor,
+                stable_need_secs,
+                binance_dir,
+                bitget_dir,
+                output_dir,
+            ) for sym in symbols]
+        )
     print('所有任务完成')
