@@ -213,9 +213,9 @@ class Position:
 def estimate_entry_profit_margin(row: pd.Series, params: Params, side: Literal["long", "short"]) -> float:
     fee_buffer = 2.0 * params.fee_hedge
     if side == "long":
-        margin = (row["bid_mean"] + row["bid_std"]) - row["bid_bid"]
+        margin = (row["ask_mean"] + row["ask_std"]) - row["bid_bid"]
     else:
-        margin = row["ask_ask"] - (row["ask_mean"] - row["ask_std"])
+        margin = row["ask_ask"] - (row["bid_mean"] - row["bid_std"])
     return float(margin - fee_buffer)
 
 
