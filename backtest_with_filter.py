@@ -63,6 +63,21 @@ def load_merged_orderbook(
     return merged
 
 
+def check_data_coverage(df: pd.DataFrame, threshold: float = 0.70) -> Tuple[bool, float, int, int]:
+    """Check 1-second data coverage between first and last timestamps.
+    Returns (ok, coverage, actual_rows, expected_seconds).
+    """
+    if df is None or df.empty:
+        return False, 0.0, 0, 0
+    start, end = df.index[0], df.index[-1]
+    total_secs = int((end - start).total_seconds()) + 1
+    if total_secs <= 0:
+        return False, 0.0, len(df), max(total_secs, 0)
+    actual = int(len(df))
+    coverage = actual / float(total_secs)
+    return coverage >= threshold, float(coverage), actual, total_secs
+
+
 def add_spread_stats(
     df: pd.DataFrame,
     window: str = "4h",
@@ -408,6 +423,10 @@ def compute_metrics(trades_df: pd.DataFrame, equity_df: pd.DataFrame) -> dict:
 
 def run_for_symbol(symbol: str, args) -> Tuple[str, dict]:
     df = load_merged_orderbook(symbol, args.binance_dir, args.bitget_dir, resample="1s")
+    ok, cov, actual, total = check_data_coverage(df, threshold=0.70)
+    if not ok:
+        print(f"Skipping {symbol}: data coverage {cov:.2%} ({actual}/{total}) < 70%")
+        return symbol, compute_metrics(pd.DataFrame(), pd.DataFrame())
     df = add_spread_stats(df, window=args.window, min_periods=args.min_periods)
 
     # Stability uses bid/bid ratio as the value stream (consistent with analysis_all)
