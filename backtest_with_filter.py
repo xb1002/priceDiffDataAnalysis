@@ -491,19 +491,36 @@ def main():
         try:
             sym_, metrics = run_for_symbol(sym, args)
             results.append((sym_, metrics))
+            # 打印结果
+            print(
+                f"{sym}: trades={metrics['trades']} win_rate={metrics['win_rate']:.2%} total_ret={metrics['total_ret_pct']:.2%} "
+                f"MDD={metrics['max_drawdown']:.2%} Sharpe={metrics['sharpe']:.2f} days={metrics['duration_days']:.1f} "
+                f"avg_hold={metrics['avg_holding_minutes']:.2f}m unstable_closes={metrics['unstable_closes']}"
+            )
         except Exception as e:
             print(f"Error on {sym}: {e}")
 
     if results:
         print("Backtest With Filter Summary")
+        # for sym, m in results:
+        #     print(
+        #         f"{sym}: trades={m['trades']} win_rate={m['win_rate']:.2%} total_ret={m['total_ret_pct']:.2%} "
+        #         f"MDD={m['max_drawdown']:.2%} Sharpe={m['sharpe']:.2f} days={m['duration_days']:.1f} "
+        #         f"avg_hold={m['avg_holding_minutes']:.2f}m unstable_closes={m['unstable_closes']}"
+        #     )
+
+        # Write aggregated metrics to CSV under <output_dir>/compare/
+        compare_dir = os.path.join(args.output_dir, "compare")
+        os.makedirs(compare_dir, exist_ok=True)
+        out_path = os.path.join(compare_dir, "backtest_with_filter_results.csv")
+        rows = []
         for sym, m in results:
-            print(
-                f"{sym}: trades={m['trades']} win_rate={m['win_rate']:.2%} total_ret={m['total_ret_pct']:.2%} "
-                f"MDD={m['max_drawdown']:.2%} Sharpe={m['sharpe']:.2f} days={m['duration_days']:.1f} "
-                f"avg_hold={m['avg_holding_minutes']:.2f}m unstable_closes={m['unstable_closes']}"
-            )
+            row = {"symbol": sym}
+            row.update(m)
+            rows.append(row)
+        pd.DataFrame(rows).to_csv(out_path, index=False)
+        print(f"Saved metrics to {out_path}")
 
 
 if __name__ == "__main__":
     main()
-

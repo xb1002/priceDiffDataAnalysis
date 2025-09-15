@@ -404,15 +404,31 @@ def main():
             gfiles = {f[:-4] for f in os.listdir(args.bitget_dir) if f.endswith(".csv")}
             symbols = sorted(list(bfiles.intersection(gfiles)))
 
+    results = []
     for sym in symbols:
         try:
             sym_, metrics = run_for_symbol(sym, args)
+            results.append((sym_, metrics))
             print(f"{sym_}: trades={metrics['trades']} win_rate={metrics['win_rate']:.2%} "
                   f"total_ret={metrics['total_ret_pct']:.2%} MDD={metrics['max_drawdown']:.2%} "
                   f"Sharpe={metrics['sharpe']:.2f} days={metrics['duration_days']:.1f} "
                   f"avg_hold={metrics['avg_holding_minutes']:.2f}m")
         except Exception as e:
             print(f"Error on {sym}: {e}")
+
+    # Write aggregated metrics to CSV
+    if results:
+        # Save aggregated metrics under <output_dir>/compare/
+        compare_dir = os.path.join(args.output_dir, "compare")
+        os.makedirs(compare_dir, exist_ok=True)
+        out_path = os.path.join(compare_dir, "backtest_results.csv")
+        rows = []
+        for sym, m in results:
+            row = {"symbol": sym}
+            row.update(m)
+            rows.append(row)
+        pd.DataFrame(rows).to_csv(out_path, index=False)
+        print(f"Saved metrics to {out_path}")
 
 
 if __name__ == "__main__":
