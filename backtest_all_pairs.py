@@ -401,6 +401,7 @@ def main():
     parser.add_argument("--bitget-dir", default="data/bitget", help="Bitget 数据目录")
     parser.add_argument("--bbo-dir", default="data/bbo", help="预处理后的BBO输出目录")
     parser.add_argument("--output-dir", default="./data/backtest", help="输出目录")
+    parser.add_argument("--max-symbols", type=int, default=50, help="最多读取的交易对数量（上限100）")
 
     # Trading/stat params
     parser.add_argument("--window", default="4h", help="回归线滚动窗口，默认4h")
@@ -422,6 +423,10 @@ def main():
         bfiles = {f[:-4] for f in os.listdir(args.binance_dir) if f.endswith(".csv")}
         gfiles = {f[:-4] for f in os.listdir(args.bitget_dir) if f.endswith(".csv")}
         symbols = sorted(list(bfiles.intersection(gfiles)))
+        # Cap number of symbols as requested, hard upper bound at 100
+        max_syms = max(0, min(int(args.max_symbols), 20))
+        if max_syms and len(symbols) > max_syms:
+            symbols = symbols[:max_syms]
     else:
         symbols = []
 
@@ -479,4 +484,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
