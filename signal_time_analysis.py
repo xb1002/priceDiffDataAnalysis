@@ -123,21 +123,29 @@ def analyze_symbol(
         print(f"{symbol}: merged dataframe is empty")
         return None
 
+    df = df.sort_index()
+    start_ts, end_ts = df.index[0], df.index[-1]
+    expected_seconds = int((end_ts - start_ts).total_seconds()) + 1
+    if expected_seconds <= 0:
+        print(f"{symbol}: 时间跨度异常，跳过")
+        return None
+    coverage = len(df) / float(expected_seconds)
+    if coverage < 0.7:
+        print(f"{symbol}: 数据覆盖率 {coverage:.2%} < 70%，跳过")
+        return None
+
     df = add_spread_stats(df, window=params.window, min_periods=params.min_periods)
     df = df.sort_index()
     signals = compute_signal_series(df, params)
 
-    time_span_seconds = max(
-        float((df.index[-1] - df.index[0]).total_seconds()),
-        float(len(df)),
-        1.0,
-    )
+    time_span_seconds = float(expected_seconds)
 
     metrics: Dict[str, object] = {
         "symbol": symbol,
         "observations": int(len(df)),
-        "start": df.index[0].isoformat(),
-        "end": df.index[-1].isoformat(),
+        "start": start_ts.isoformat(),
+        "end": end_ts.isoformat(),
+        "coverage": coverage,
         "time_span_seconds": time_span_seconds,
     }
 
@@ -199,7 +207,7 @@ def main() -> None:
             continue
         results.append(metrics)
         print(
-            f"{sym}: span {metrics['time_span_seconds']:.0f}s | "
+            f"{sym}: span {metrics['time_span_seconds']:.0f}s | coverage {metrics['coverage']:.2%} | "
             f"long_open {metrics['long_open_count']} signals (~{metrics['long_open_ratio']:.2%}); "
             f"short_open {metrics['short_open_count']} signals (~{metrics['short_open_ratio']:.2%})"
         )
