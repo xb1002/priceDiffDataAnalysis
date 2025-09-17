@@ -13,7 +13,7 @@ from __future__ import annotations
 import argparse
 import os
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional
+from typing import Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import pandas as pd
@@ -41,6 +41,55 @@ def discover_symbols(binance_dir: str, bitget_dir: str, symbols: Optional[Iterab
     bfiles = {f[:-4] for f in os.listdir(binance_dir) if f.endswith(".csv")}
     gfiles = {f[:-4] for f in os.listdir(bitget_dir) if f.endswith(".csv")}
     return sorted(bfiles.intersection(gfiles))
+
+
+def _load_raw_orderbook(path: str, bid_col: str, ask_col: str, ts_col: str) -> pd.DataFrame:
+    df = pd.read_csv(path, usecols=[bid_col, ask_col, ts_col])
+    df.columns = ["bid", "ask", "timestamp"]
+    df["timestamp"] = pd.to_datetime(df["timestamp"], unit="ms")
+    df = df[~df["timestamp"].duplicated(keep="first")]
+    df = df[df["timestamp"].notna()].sort_values("timestamp")
+    return df.set_index("timestamp")
+
+
+def compute_effective_coverage(
+    symbol: str,
+    binance_dir: str,
+    bitget_dir: str,
+) -> Optional[Tuple[pd.Timestamp, pd.Timestamp, int, int, float]]:
+    binance_fp = os.path.join(binance_dir, f"{symbol}.csv")
+    bitget_fp = os.path.join(bitget_dir, f"{symbol}.csv")
+    if not (os.path.exists(binance_fp) and os.path.exists(bitget_fp)):
+        return None
+
+    try:
+        main = _load_raw_orderbook(binance_fp, "b", "a", "T")
+        hedge = _load_raw_orderbook(bitget_fp, "bidPr", "askPr", "ts")
+    except Exception as exc:
+        print(f"{symbol}: 原始数据读取失败 ({exc})")
+        return None
+
+    if main.empty or hedge.empty:
+        return None
+
+    start = max(main.index[0], hedge.index[0]).floor("1s")
+    end = min(main.index[-1], hedge.index[-1]).floor("1s")
+    if end <= start:
+        return None
+
+    time_index = pd.date_range(start=start, end=end, freq="1s")
+    expected_seconds = len(time_index)
+
+    main_1s = main.resample("1s").last().reindex(time_index)
+    hedge_1s = hedge.resample("1s").last().reindex(time_index)
+
+    mask = (
+        main_1s[["bid", "ask"]].notna().all(axis=1)
+        & hedge_1s[["bid", "ask"]].notna().all(axis=1)
+    )
+    available_seconds = int(mask.sum())
+    coverage = available_seconds / expected_seconds if expected_seconds > 0 else 0.0
+    return start, end, expected_seconds, available_seconds, coverage
 
 
 def compute_signal_series(df: pd.DataFrame, params: AnalysisParams) -> Dict[str, pd.Series]:
@@ -110,12 +159,24 @@ def analyze_symbol(
     binance_dir: str,
     bitget_dir: str,
 ) -> Optional[Dict[str, object]]:
+    coverage_info = compute_effective_coverage(symbol, binance_dir, bitget_dir)
+    if coverage_info is None:
+        print(f"{symbol}: 无法计算数据覆盖率，跳过")
+        return None
+    start_ts, end_ts, expected_seconds, available_seconds, coverage = coverage_info
+    if expected_seconds <= 0:
+        print(f"{symbol}: 时间跨度异常，跳过")
+        return None
+    if coverage < 0.7:
+        print(f"{symbol}: 数据覆盖率 {coverage:.2%} < 70%，跳过")
+        return None
+
     try:
         df = load_merged_orderbook(symbol, binance_dir, bitget_dir, resample="1s")
     except FileNotFoundError as exc:
         print(f"{symbol}: data missing ({exc})")
         return None
-    except Exception as exc:  # guard unexpected parsing errors
+    except Exception as exc:
         print(f"{symbol}: failed to load data ({exc})")
         return None
 
@@ -123,17 +184,7 @@ def analyze_symbol(
         print(f"{symbol}: merged dataframe is empty")
         return None
 
-    df = df.sort_index()
-    start_ts, end_ts = df.index[0], df.index[-1]
-    expected_seconds = int((end_ts - start_ts).total_seconds()) + 1
-    if expected_seconds <= 0:
-        print(f"{symbol}: 时间跨度异常，跳过")
-        return None
-    coverage = len(df) / float(expected_seconds)
-    if coverage < 0.7:
-        print(f"{symbol}: 数据覆盖率 {coverage:.2%} < 70%，跳过")
-        return None
-
+    df = df.sort_index().loc[start_ts:end_ts]
     df = add_spread_stats(df, window=params.window, min_periods=params.min_periods)
     df = df.sort_index()
     signals = compute_signal_series(df, params)
@@ -143,6 +194,8 @@ def analyze_symbol(
     metrics: Dict[str, object] = {
         "symbol": symbol,
         "observations": int(len(df)),
+        "raw_expected_seconds": expected_seconds,
+        "raw_available_seconds": available_seconds,
         "start": start_ts.isoformat(),
         "end": end_ts.isoformat(),
         "coverage": coverage,
@@ -207,7 +260,8 @@ def main() -> None:
             continue
         results.append(metrics)
         print(
-            f"{sym}: span {metrics['time_span_seconds']:.0f}s | coverage {metrics['coverage']:.2%} | "
+            f"{sym}: span {metrics['time_span_seconds']:.0f}s | raw {metrics['raw_available_seconds']}/{metrics['raw_expected_seconds']}s "
+            f"({metrics['coverage']:.2%}) | "
             f"long_open {metrics['long_open_count']} signals (~{metrics['long_open_ratio']:.2%}); "
             f"short_open {metrics['short_open_count']} signals (~{metrics['short_open_ratio']:.2%})"
         )
